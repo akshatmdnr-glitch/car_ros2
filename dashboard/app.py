@@ -1,4 +1,3 @@
-
 """
 Car Slave — Master Dashboard
 
@@ -10,66 +9,71 @@ Usage:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import time
+import logging
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("dashboard")
 
 st.set_page_config(page_title="Car Slave Dashboard", layout="wide")
 
-if "network_target" not in st.session_state:
-    st.session_state.network_target = "Ethernet"
-if "ethernet_host" not in st.session_state:
-    st.session_state.ethernet_host = "localhost"
-if "wifi_host" not in st.session_state:
-    st.session_state.wifi_host = "localhost"
+if "log_messages" not in st.session_state:
+    st.session_state.log_messages = []
+
+
+def app_log(level: str, msg: str):
+    ts = time.strftime("%H:%M:%S")
+    st.session_state.log_messages.append(f"[{ts}] [{level}] {msg}")
+    if len(st.session_state.log_messages) > 100:
+        st.session_state.log_messages = st.session_state.log_messages[-100:]
+    getattr(log, level.lower(), log.info)(msg)
+
+
+app_log("INFO", f"Dashboard started, target: {BASE_URL}")
+
 
 # -- Sidebar: Connection --------------------------------------------------
 
 st.sidebar.title("Connection")
-network_target = st.sidebar.toggle(
-    "Use Wi-Fi connection",
-    value=st.session_state.network_target == "Wi-Fi",
-)
-st.session_state.network_target = "Wi-Fi" if network_target else "Ethernet"
-
-ethernet_host = st.sidebar.text_input(
-    "Ethernet IP",
-    key="ethernet_host",
-    disabled=st.session_state.network_target != "Ethernet",
-)
-wifi_host = st.sidebar.text_input(
-    "Wi-Fi IP",
-    key="wifi_host",
-    disabled=st.session_state.network_target != "Wi-Fi",
-)
-
-pi_host = (
-    st.session_state.wifi_host
-    if st.session_state.network_target == "Wi-Fi"
-    else st.session_state.ethernet_host
-)
+pi_host = st.sidebar.text_input("Raspberry Pi IP", value="localhost")
 pi_port = st.sidebar.number_input("Port", value=8000, min_value=1, max_value=65535)
 BASE_URL = f"http://{pi_host}:{pi_port}"
-st.sidebar.caption(
-    f"Active target: {st.session_state.network_target} ({pi_host}:{pi_port})"
-)
 
 if st.sidebar.button("Test Connection"):
+    app_log("INFO", f"Testing connection to {BASE_URL}")
     try:
         r = requests.get(f"{BASE_URL}/", timeout=3)
         if r.status_code == 200:
             st.sidebar.success("Connected")
+            app_log("INFO", f"Connection OK: {r.json()}")
         else:
             st.sidebar.error(f"HTTP {r.status_code}")
-    except requests.ConnectionError:
+            app_log("ERROR", f"HTTP {r.status_code}")
+    except requests.ConnectionError as e:
         st.sidebar.error("Cannot reach the Pi. Check IP and port.")
-    except requests.Timeout:
+        app_log("ERROR", f"ConnectionError: {e}")
+    except requests.Timeout as e:
         st.sidebar.error("Connection timed out.")
+        app_log("ERROR", f"Timeout: {e}")
 
 st.sidebar.divider()
 auto_refresh = st.sidebar.checkbox("Auto-refresh data", value=False)
 refresh_rate = st.sidebar.slider(
     "Refresh interval (s)", 1, 10, 2, disabled=not auto_refresh
 )
+
+st.sidebar.divider()
+with st.sidebar.expander("Debug Log", expanded=False):
+    if st.button("Clear Log"):
+        st.session_state.log_messages = []
+    log_text = "\n".join(st.session_state.log_messages[::-1])
+    st.code(log_text, language=None)
 
 # -- Title -----------------------------------------------------------------
 
@@ -87,43 +91,58 @@ with col_camera:
         stream_on = st.toggle("Show live stream", value=True)
     with cam_col2:
         if st.button("Snapshot"):
+            app_log("INFO", f"Requesting snapshot from {BASE_URL}/camera/snapshot")
             try:
                 r = requests.get(f"{BASE_URL}/camera/snapshot", timeout=5)
+                app_log(
+                    "DEBUG",
+                    f"Snapshot response: status={r.status_code}, size={len(r.content)} bytes",
+                )
                 if r.status_code == 200:
                     st.image(r.content, caption="Snapshot", use_container_width=True)
                 else:
                     st.error(f"Snapshot failed: {r.status_code}")
+                    app_log("ERROR", f"Snapshot failed: {r.status_code}")
             except requests.RequestException as e:
                 st.error(f"Request failed: {e}")
+                app_log("ERROR", f"Snapshot request failed: {e}")
 
     if stream_on:
         stream_url = f"{BASE_URL}/camera/stream"
-        st.markdown(
+        app_log("DEBUG", f"Stream URL: {stream_url}")
+        components.html(
             f'<img src="{stream_url}" width="100%" style="border-radius: 4px;" />',
-            unsafe_allow_html=True,
+            height=480,
         )
     else:
         st.info("Live stream is off.")
+        app_log("DEBUG", "Live stream is off")
 
     cam_col_a, cam_col_b = st.columns(2)
     with cam_col_a:
         if st.button("Enable Camera"):
+            app_log("INFO", "Enabling camera...")
             try:
-                requests.post(
+                r = requests.post(
                     f"{BASE_URL}/camera/enable", json={"enabled": True}, timeout=3
                 )
+                app_log("DEBUG", f"Enable camera response: {r.status_code} {r.text}")
                 st.success("Camera enabled")
             except requests.RequestException as e:
                 st.error(str(e))
+                app_log("ERROR", f"Enable camera failed: {e}")
     with cam_col_b:
         if st.button("Disable Camera"):
+            app_log("INFO", "Disabling camera...")
             try:
-                requests.post(
+                r = requests.post(
                     f"{BASE_URL}/camera/enable", json={"enabled": False}, timeout=3
                 )
+                app_log("DEBUG", f"Disable camera response: {r.status_code} {r.text}")
                 st.warning("Camera disabled")
             except requests.RequestException as e:
                 st.error(str(e))
+                app_log("ERROR", f"Disable camera failed: {e}")
 
 # -- Controls & Sensors ----------------------------------------------------
 
@@ -214,15 +233,21 @@ with col_controls:
         custom_linear = st.slider("Linear X", -1.0, 1.0, 0.0, 0.05, key="custom_lin")
         custom_angular = st.slider("Angular Z", -1.0, 1.0, 0.0, 0.05, key="custom_ang")
         if st.button("Send Custom Command"):
+            app_log(
+                "INFO",
+                f"Sending custom cmd_vel: linear={custom_linear}, angular={custom_angular}",
+            )
             try:
-                requests.post(
+                r = requests.post(
                     f"{BASE_URL}/cmd_vel",
                     json={"linear_x": custom_linear, "angular_z": custom_angular},
                     timeout=2,
                 )
+                app_log("DEBUG", f"cmd_vel response: {r.status_code} {r.text}")
                 st.success(f"Sent: linear={custom_linear}, angular={custom_angular}")
-            except requests.RequestException:
+            except requests.RequestException as e:
                 st.error("Failed to send command")
+                app_log("ERROR", f"cmd_vel failed: {e}")
 
     st.divider()
 
@@ -241,9 +266,13 @@ with col_controls:
         return None
 
     if st.button("Refresh Distance", key="refresh_distance"):
+        app_log("INFO", "Fetching distance...")
         data = fetch_distance()
         if not data:
             distance_placeholder.warning("Could not fetch distance data")
+            app_log("ERROR", "Failed to fetch distance data")
+        else:
+            app_log("DEBUG", f"Distance data: {data}")
 
     data = fetch_distance()
     if data:
@@ -262,10 +291,12 @@ with col_controls:
     status_placeholder = st.empty()
 
     if st.button("Refresh Status", key="refresh_status"):
+        app_log("INFO", "Fetching system status...")
         try:
             r = requests.get(f"{BASE_URL}/status", timeout=3)
             if r.status_code == 200:
                 status = r.json()
+                app_log("DEBUG", f"Status: {status}")
                 with status_placeholder.container():
                     s1, s2, s3 = st.columns(3)
                     s1.metric(
@@ -279,8 +310,10 @@ with col_controls:
                     s3.metric("GPIO", "Yes" if motor.get("gpio_available") else "No")
             else:
                 status_placeholder.error(f"HTTP {r.status_code}")
+                app_log("ERROR", f"Status fetch failed: HTTP {r.status_code}")
         except requests.RequestException as e:
             status_placeholder.error(f"Cannot reach Pi: {e}")
+            app_log("ERROR", f"Status fetch failed: {e}")
 
 # -- Auto-refresh ----------------------------------------------------------
 
