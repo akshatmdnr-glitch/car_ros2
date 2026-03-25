@@ -27,6 +27,8 @@ ROS 2 Jazzy slave system that runs on the Raspberry Pi. Provides camera streamin
 | `uv_sensor_node` | `/uv_sensor/reading` | `std_msgs/Float32` | Publishes UV index readings |
 | `motor_controller_node` | `/cmd_vel` | `geometry_msgs/Twist` | Subscribes to velocity commands |
 | `motor_controller_node` | `/motor/status` | `std_msgs/String` | Publishes motor status JSON |
+| `gyro_sensor_node` | `/gyro/imu` | `sensor_msgs/Imu` | Publishes IMU data (accel + gyro) |
+| `gyro_sensor_node` | `/gyro/status` | `std_msgs/String` | Publishes gyro status JSON |
 
 ## HTTP API Endpoints
 
@@ -36,7 +38,8 @@ ROS 2 Jazzy slave system that runs on the Raspberry Pi. Provides camera streamin
 | `GET` | `/status` | Full system status |
 | `POST` | `/cmd_vel` | Send motor command `{"linear_x": 0.5, "angular_z": 0.0}` |
 | `POST` | `/stop` | Emergency stop |
-| `GET` | `/uv` | Latest UV sensor reading |
+| `GET` | `/distance` | Latest ultrasonic distance reading (cm) |
+| `GET` | `/gyro` | Latest gyroscope/IMU readings |
 | `GET` | `/camera/stream` | MJPEG video stream (embed in `<img>` tag) |
 | `GET` | `/camera/snapshot` | Single JPEG frame |
 | `POST` | `/camera/enable` | Enable/disable camera `{"enabled": true}` |

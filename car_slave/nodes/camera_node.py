@@ -66,26 +66,34 @@ class CameraNode(Node):
             self.get_logger().warn('picamera2 not available — using test pattern')
             return
 
-        self._camera = Picamera2()
-        config = self._camera.create_preview_configuration(
-            main={'size': (self._width, self._height), 'format': 'RGB888'}
-        )
-        self._camera.configure(config)
-
-        # Set autofocus mode (may not be supported on all camera modules)
         try:
-            from libcamera import controls
-            af_modes = {
-                'continuous': controls.AfModeEnum.Continuous,
-                'manual': controls.AfModeEnum.Manual,
-                'auto': controls.AfModeEnum.Auto,
-            }
-            af_mode = af_modes.get(self._autofocus_mode, controls.AfModeEnum.Continuous)
-            self._camera.set_controls({'AfMode': af_mode})
-        except Exception as e:
-            self.get_logger().warn(f'Autofocus setup skipped: {e}')
+            camera_info = Picamera2.global_camera_info()
+            if not camera_info:
+                self.get_logger().warn('No camera detected — using test pattern')
+                return
 
-        self._camera.start()
+            self._camera = Picamera2()
+            config = self._camera.create_preview_configuration(
+                main={'size': (self._width, self._height), 'format': 'RGB888'}
+            )
+            self._camera.configure(config)
+
+            try:
+                from libcamera import controls
+                af_modes = {
+                    'continuous': controls.AfModeEnum.Continuous,
+                    'manual': controls.AfModeEnum.Manual,
+                    'auto': controls.AfModeEnum.Auto,
+                }
+                af_mode = af_modes.get(self._autofocus_mode, controls.AfModeEnum.Continuous)
+                self._camera.set_controls({'AfMode': af_mode})
+            except Exception as e:
+                self.get_logger().warn(f'Autofocus setup skipped: {e}')
+
+            self._camera.start()
+        except Exception as e:
+            self.get_logger().warn(f'Camera init failed: {e} — using test pattern')
+            self._camera = None
 
     def _capture_callback(self):
         if not self._enabled:

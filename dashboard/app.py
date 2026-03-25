@@ -283,6 +283,52 @@ with col_controls:
 
     st.divider()
 
+    # -- Gyro Sensor --------------------------------------------------------
+    st.header("Gyro / IMU")
+
+    gyro_placeholder = st.empty()
+
+    def fetch_gyro():
+        try:
+            r = requests.get(f"{BASE_URL}/gyro", timeout=3)
+            if r.status_code == 200:
+                return r.json()
+        except requests.RequestException:
+            pass
+        return None
+
+    if st.button("Refresh Gyro", key="refresh_gyro"):
+        app_log("INFO", "Fetching gyro data...")
+        gyro_data = fetch_gyro()
+        if not gyro_data:
+            gyro_placeholder.warning("Could not fetch gyro data")
+            app_log("ERROR", "Failed to fetch gyro data")
+        else:
+            app_log("DEBUG", f"Gyro data: {gyro_data}")
+
+    gyro_data = fetch_gyro()
+    if gyro_data:
+        gyro_status = gyro_data.get("gyro_status", {})
+        accel = gyro_status.get("accel", {})
+        gyro = gyro_status.get("gyro", {})
+        sensor_type = gyro_data.get("sensor_type", "unknown")
+
+        g1, g2, g3 = st.columns(3)
+        with g1:
+            st.metric("Accel X", f"{accel.get('x', 0):.2f} m/s²")
+            st.metric("Gyro X", f"{gyro.get('x', 0):.1f} °/s")
+        with g2:
+            st.metric("Accel Y", f"{accel.get('y', 0):.2f} m/s²")
+            st.metric("Gyro Y", f"{gyro.get('y', 0):.1f} °/s")
+        with g3:
+            st.metric("Accel Z", f"{accel.get('z', 0):.2f} m/s²")
+            st.metric("Gyro Z", f"{gyro.get('z', 0):.1f} °/s")
+        st.caption(f"Sensor: {sensor_type}")
+    else:
+        gyro_placeholder.info("Click refresh or enable auto-refresh")
+
+    st.divider()
+
     # -- System Status -----------------------------------------------------
     st.header("System Status")
 
@@ -296,7 +342,7 @@ with col_controls:
                 status = r.json()
                 app_log("DEBUG", f"Status: {status}")
                 with status_placeholder.container():
-                    s1, s2, s3 = st.columns(3)
+                    s1, s2, s3, s4 = st.columns(4)
                     s1.metric(
                         "Camera", "Active" if status["camera"]["active"] else "Inactive"
                     )
@@ -305,7 +351,9 @@ with col_controls:
                         f"{status['ultrasonic']['latest_distance_cm']:.1f} cm",
                     )
                     motor = status.get("motor", {})
-                    s3.metric("GPIO", "Yes" if motor.get("gpio_available") else "No")
+                    s3.metric("Motor GPIO", "Yes" if motor.get("gpio_available") else "No")
+                    gyro = status.get("gyro", {})
+                    s4.metric("Gyro", gyro.get("sensor_type", "N/A"))
             else:
                 status_placeholder.error(f"HTTP {r.status_code}")
                 app_log("ERROR", f"Status fetch failed: HTTP {r.status_code}")

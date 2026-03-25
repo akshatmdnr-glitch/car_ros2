@@ -55,6 +55,13 @@ def generate_launch_description():
         output='screen',
     )
 
+    gyro_sensor_node = Node(
+        package='car_slave',
+        executable='gyro_sensor_node',
+        name='gyro_sensor_node',
+        output='screen',
+    )
+
     return LaunchDescription([
         camera_fps,
         camera_width,
@@ -63,4 +70,5 @@ def generate_launch_description():
         camera_node,
         uv_sensor_node,
         motor_controller_node,
+        gyro_sensor_node,
     ])
