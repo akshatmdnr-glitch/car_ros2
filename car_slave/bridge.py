@@ -141,7 +141,6 @@ class BridgeNode(Node):
 
     def __init__(self):
         super().__init__("fastapi_bridge")
-        super().__init__("fastapi_bridge")
 
         self._cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self._camera_enable_pub = self.create_publisher(Bool, "camera/enable", 10)
@@ -157,7 +156,6 @@ class BridgeNode(Node):
             String, "motor/status", self._motor_status_callback, 10
         )
 
-        self.get_logger().info("FastAPI bridge node started")
         self.get_logger().info("FastAPI bridge node started")
 
     def _distance_callback(self, msg: Float32):
@@ -412,7 +410,6 @@ def main(args=None):
     ros_thread.start()
 
     # Start FastAPI server (blocking)
-    bridge_node.get_logger().info("Starting FastAPI server on 0.0.0.0:8000")
     bridge_node.get_logger().info("Starting FastAPI server on 0.0.0.0:8000")
     try:
         uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
