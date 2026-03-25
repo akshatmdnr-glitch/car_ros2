@@ -4,6 +4,7 @@ Launches all ROS 2 nodes:
   - camera_node
   - ultrasonic_sensor_node
   - motor_controller_node
+  - gyro_sensor_node
 
 Note: The FastAPI bridge (bridge.py) runs separately and manages
 its own node lifecycle. Use `ros2 run car_slave bridge` to start
@@ -55,6 +56,13 @@ def generate_launch_description():
         output='screen',
     )
 
+    gyro_sensor_node = Node(
+        package='car_slave',
+        executable='gyro_sensor_node',
+        name='gyro_sensor_node',
+        output='screen',
+    )
+
     return LaunchDescription([
         camera_fps,
         camera_width,
@@ -63,4 +71,5 @@ def generate_launch_description():
         camera_node,
         uv_sensor_node,
         motor_controller_node,
+        gyro_sensor_node,
     ])

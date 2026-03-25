@@ -28,3 +28,11 @@ motor_controller_node:
     max_speed: 1.0
     wheel_base: 0.2
     status_rate: 5.0
+
+gyro_sensor_node:
+  ros__parameters:
+    publish_rate: 20.0
+    i2c_bus: 1
+    gyro_scale: 131.0
+    accel_scale: 16384.0
+    frame_id: "imu_link"

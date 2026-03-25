@@ -38,6 +38,7 @@ import uvicorn
 from car_slave.nodes.camera_node import CameraNode
 from car_slave.nodes.uv_sensor_node import UltrasonicSensorNode
 from car_slave.nodes.motor_controller_node import MotorControllerNode
+from car_slave.nodes.gyro_sensor_node import GyroSensorNode
 from starlette.requests import Request
 
 
@@ -115,6 +116,11 @@ class BridgeNode(Node):
             String, "motor/status", self._motor_status_callback, 10
         )
 
+        self._latest_gyro_status: dict = {}
+        self._gyro_sub = self.create_subscription(
+            String, "gyro/status", self._gyro_status_callback, 10
+        )
+
         self.get_logger().info("FastAPI bridge node started")
 
     def _distance_callback(self, msg: Float32):
@@ -123,6 +129,12 @@ class BridgeNode(Node):
     def _motor_status_callback(self, msg: String):
         try:
             self._latest_motor_status = json.loads(msg.data)
+        except json.JSONDecodeError:
+            pass
+
+    def _gyro_status_callback(self, msg: String):
+        try:
+            self._latest_gyro_status = json.loads(msg.data)
         except json.JSONDecodeError:
             pass
 
@@ -143,6 +155,7 @@ class BridgeNode(Node):
 camera_node: CameraNode | None = None
 ultrasonic_node: UltrasonicSensorNode | None = None
 motor_node: MotorControllerNode | None = None
+gyro_node: GyroSensorNode | None = None
 bridge_node: BridgeNode | None = None
 
 
@@ -193,6 +206,7 @@ async def get_status():
             "latest_distance_cm": bridge_node._latest_distance if bridge_node else None,
         },
         "motor": bridge_node._latest_motor_status if bridge_node else {},
+        "gyro": bridge_node._latest_gyro_status if bridge_node else {},
         "timestamp": time.time(),
     }
 
@@ -236,6 +250,20 @@ async def get_distance():
         "sensor_type": ultrasonic_node.active_sensor_type
         if ultrasonic_node
         else "unavailable",
+        "timestamp": time.time(),
+    }
+
+
+# ── Gyro Sensor ────────────────────────────────────────────────────────
+
+
+@app.get("/gyro", summary="Get latest gyroscope/IMU readings")
+async def get_gyro():
+    if bridge_node is None:
+        return JSONResponse(status_code=503, content={"error": "Bridge not ready"})
+    return {
+        "gyro_status": bridge_node._latest_gyro_status,
+        "sensor_type": gyro_node.active_sensor_type if gyro_node else "unavailable",
         "timestamp": time.time(),
     }
 
@@ -330,28 +358,26 @@ def _ros_spin(executor: MultiThreadedExecutor):
 
 
 def main(args=None):
-    global camera_node, ultrasonic_node, motor_node, bridge_node
+    global camera_node, ultrasonic_node, motor_node, gyro_node, bridge_node
 
     rclpy.init(args=args)
 
-    # Create all nodes
     camera_node = CameraNode()
     ultrasonic_node = UltrasonicSensorNode()
     motor_node = MotorControllerNode()
+    gyro_node = GyroSensorNode()
     bridge_node = BridgeNode()
 
-    # Multi-threaded executor for all nodes
-    executor = MultiThreadedExecutor(num_threads=4)
+    executor = MultiThreadedExecutor(num_threads=5)
     executor.add_node(camera_node)
     executor.add_node(ultrasonic_node)
     executor.add_node(motor_node)
+    executor.add_node(gyro_node)
     executor.add_node(bridge_node)
 
-    # Spin ROS 2 in background
     ros_thread = threading.Thread(target=_ros_spin, args=(executor,), daemon=True)
     ros_thread.start()
 
-    # Start FastAPI server (blocking)
     bridge_node.get_logger().info("Starting FastAPI server on 0.0.0.0:8000")
     try:
         uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
@@ -362,6 +388,7 @@ def main(args=None):
         camera_node.destroy_node()
         ultrasonic_node.destroy_node()
         motor_node.destroy_node()
+        gyro_node.destroy_node()
         bridge_node.destroy_node()
         rclpy.try_shutdown()
 
