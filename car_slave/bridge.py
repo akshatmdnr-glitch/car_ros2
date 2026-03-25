@@ -22,9 +22,6 @@ import json
 import logging
 import socket
 import netifaces
-import logging
-import socket
-import netifaces
 
 import rclpy
 from rclpy.node import Node
@@ -41,44 +38,6 @@ import uvicorn
 from car_slave.nodes.camera_node import CameraNode
 from car_slave.nodes.uv_sensor_node import UltrasonicSensorNode
 from car_slave.nodes.motor_controller_node import MotorControllerNode
-from starlette.requests import Request
-
-
-# ── Logging setup ────────────────────────────────────────────────────
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger("network")
-
-
-def _get_interface_subnet(iface: str) -> str | None:
-    """Get the subnet prefix for a network interface (e.g., '192.168.1')."""
-    try:
-        addrs = netifaces.ifaddresses(iface)
-        if netifaces.AF_INET in addrs:
-            ip = addrs[netifaces.AF_INET][0].get("addr", "")
-            parts = ip.split(".")
-            if len(parts) == 4:
-                return ".".join(parts[:3])
-    except Exception:
-        pass
-    return None
-
-
-def _detect_network_source(client_ip: str) -> str:
-    """Detect if client IP is on Ethernet or WiFi subnet."""
-    for iface in ["eth0", "enp0s3", "enp2s0"]:
-        subnet = _get_interface_subnet(iface)
-        if subnet and client_ip.startswith(subnet + "."):
-            return f"ethernet ({iface})"
-    for iface in ["wlan0", "wlp3s0"]:
-        subnet = _get_interface_subnet(iface)
-        if subnet and client_ip.startswith(subnet + "."):
-            return f"wifi ({iface})"
-    return "unknown"
 from starlette.requests import Request
 
 
@@ -215,17 +174,6 @@ async def log_network_source(request: Request, call_next):
     return response
 
 
-@app.middleware("http")
-async def log_network_source(request: Request, call_next):
-    client_ip = request.client.host if request.client else "unknown"
-    network_source = _detect_network_source(client_ip)
-    logger.info(
-        f"Request {request.method} {request.url.path} from {client_ip} via {network_source}"
-    )
-    response = await call_next(request)
-    return response
-
-
 @app.get("/", summary="Health check")
 async def root():
     return {"status": "ok", "node": "car_slave", "timestamp": time.time()}
@@ -239,9 +187,6 @@ async def get_status():
             "has_hardware": camera_node is not None and camera_node._camera is not None,
         },
         "ultrasonic": {
-            "type": ultrasonic_node.active_sensor_type
-            if ultrasonic_node
-            else "unavailable",
             "type": ultrasonic_node.active_sensor_type
             if ultrasonic_node
             else "unavailable",
@@ -288,9 +233,6 @@ async def get_distance():
         return JSONResponse(status_code=503, content={"error": "Bridge not ready"})
     return {
         "distance_cm": bridge_node._latest_distance,
-        "sensor_type": ultrasonic_node.active_sensor_type
-        if ultrasonic_node
-        else "unavailable",
         "sensor_type": ultrasonic_node.active_sensor_type
         if ultrasonic_node
         else "unavailable",
