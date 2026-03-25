@@ -1,4 +1,3 @@
-
 """
 Car Slave — Master Dashboard
 
@@ -30,6 +29,7 @@ network_target = st.sidebar.toggle(
     value=st.session_state.network_target == "Wi-Fi",
 )
 st.session_state.network_target = "Wi-Fi" if network_target else "Ethernet"
+selected_mode = "wifi" if network_target else "ethernet"
 
 ethernet_host = st.sidebar.text_input(
     "Ethernet IP",
@@ -52,6 +52,21 @@ BASE_URL = f"http://{pi_host}:{pi_port}"
 st.sidebar.caption(
     f"Active target: {st.session_state.network_target} ({pi_host}:{pi_port})"
 )
+
+if st.sidebar.button("Apply Bridge Network Mode"):
+    try:
+        r = requests.post(
+            f"{BASE_URL}/network/mode",
+            json={"mode": selected_mode},
+            timeout=3,
+        )
+        if r.status_code == 200:
+            st.sidebar.success(f"Bridge now accepts {selected_mode} requests")
+        else:
+            detail = r.json().get("error", f"HTTP {r.status_code}")
+            st.sidebar.error(detail)
+    except requests.RequestException as e:
+        st.sidebar.error(f"Failed to update bridge mode: {e}")
 
 if st.sidebar.button("Test Connection"):
     try:

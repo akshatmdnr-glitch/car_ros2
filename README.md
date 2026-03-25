@@ -159,6 +159,8 @@ curl http://<pi-ip>:8000/uv
 
 ## Configuration
 
+The dashboard can also switch the active bridge request path at runtime by calling `POST /network/mode` with `{"mode": "ethernet"}` or `{"mode": "wifi"}`. When a mode is active, the bridge rejects requests arriving from the other network.
+
 Edit `config/default_params.yaml` for GPIO pins, camera resolution, sensor type, etc. Pass as a parameter file:
 
 ```bash

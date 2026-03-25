@@ -18,6 +18,7 @@ also publishing/subscribing to ROS 2 topics.
 import argparse
 import asyncio
 import fcntl
+import ipaddress
 import json
 import os
 import socket
@@ -31,7 +32,7 @@ from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, Float32, String
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -52,6 +53,10 @@ class CmdVelRequest(BaseModel):
 
 class CameraEnableRequest(BaseModel):
     enabled: bool
+
+
+class NetworkModeRequest(BaseModel):
+    mode: str = Field(..., pattern="^(any|ethernet|wifi)$")
 
 
 # ── Bridge Node (subscribes to topics for API readback) ─────────────
@@ -124,6 +129,19 @@ def _get_interface_ipv4(interface_name: str) -> str | None:
         sock.close()
 
 
+def _get_interface_netmask(interface_name: str) -> str | None:
+    """Return the IPv4 netmask for a network interface on Linux."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        request = struct.pack("256s", interface_name[:15].encode("utf-8"))
+        response = fcntl.ioctl(sock.fileno(), 0x891B, request)
+        return socket.inet_ntoa(response[20:24])
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
 def _detect_interface(preferred_name: str, prefixes: tuple[str, ...]) -> str | None:
     """Return a usable interface name, preferring an explicit name."""
     candidates = []
@@ -169,6 +187,46 @@ def _resolve_server_binding(
     return interface_ip, interface_name
 
 
+def _resolve_interface_name(
+    mode: str, ethernet_iface: str, wifi_iface: str
+) -> str | None:
+    """Resolve the current interface name for a given transport mode."""
+    if mode == "ethernet":
+        return _detect_interface(ethernet_iface, ("eth", "en"))
+    if mode == "wifi":
+        return _detect_interface(wifi_iface, ("wlan", "wl"))
+    return None
+
+
+def _client_allowed(client_host: str) -> bool:
+    """Return whether a client IP is allowed under the active network mode."""
+    if network_mode == "any":
+        return True
+    if client_host in {"127.0.0.1", "::1", server_host}:
+        return True
+
+    interface_name = _resolve_interface_name(
+        network_mode,
+        app.state.ethernet_iface,
+        app.state.wifi_iface,
+    )
+    if interface_name is None:
+        return False
+
+    interface_ip = _get_interface_ipv4(interface_name)
+    netmask = _get_interface_netmask(interface_name)
+    if interface_ip is None or netmask is None:
+        return False
+
+    try:
+        network = ipaddress.ip_network(f"{interface_ip}/{netmask}", strict=False)
+        client_ip = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+
+    return client_ip in network
+
+
 def _parse_args(args=None):
     parser = argparse.ArgumentParser(description="Car Slave ROS 2 FastAPI bridge")
     parser.add_argument(
@@ -212,6 +270,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.state.ethernet_iface = "eth0"
+app.state.wifi_iface = "wlan0"
+
+
+@app.middleware("http")
+async def enforce_network_mode(request: Request, call_next):
+    if request.url.path == "/":
+        return await call_next(request)
+
+    client_host = request.client.host if request.client else ""
+    if not _client_allowed(client_host):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Request blocked by active network mode",
+                "network_mode": network_mode,
+                "client_host": client_host,
+            },
+        )
+
+    return await call_next(request)
+
 
 @app.get("/", summary="Health check")
 async def root():
@@ -225,6 +305,8 @@ async def get_status():
             "mode": network_mode,
             "bind_host": server_host,
             "port": server_port,
+            "ethernet_iface": app.state.ethernet_iface,
+            "wifi_iface": app.state.wifi_iface,
         },
         "camera": {
             "active": camera_node is not None and camera_node._enabled,
@@ -315,6 +397,32 @@ async def camera_enable(req: CameraEnableRequest):
     return {"status": "ok", "enabled": req.enabled}
 
 
+@app.post("/network/mode", summary="Set accepted request network mode")
+async def set_network_mode(req: NetworkModeRequest):
+    global network_mode
+
+    requested_mode = req.mode
+    if requested_mode != "any":
+        interface_name = _resolve_interface_name(
+            requested_mode,
+            app.state.ethernet_iface,
+            app.state.wifi_iface,
+        )
+        if interface_name is None:
+            return JSONResponse(
+                status_code=503,
+                content={"error": f"No active {requested_mode} interface available"},
+            )
+
+    network_mode = requested_mode
+    return {
+        "status": "ok",
+        "mode": network_mode,
+        "bind_host": server_host,
+        "port": server_port,
+    }
+
+
 # ── ROS 2 spin in background thread ─────────────────────────────────
 
 
@@ -344,6 +452,8 @@ def main(args=None):
         parsed_args.ethernet_iface,
         parsed_args.wifi_iface,
     )
+    app.state.ethernet_iface = parsed_args.ethernet_iface
+    app.state.wifi_iface = parsed_args.wifi_iface
 
     rclpy.init(args=ros_args)
 
