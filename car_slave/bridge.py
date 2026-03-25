@@ -145,19 +145,15 @@ class BridgeNode(Node):
 
         self._cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self._camera_enable_pub = self.create_publisher(Bool, "camera/enable", 10)
-        self._cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
-        self._camera_enable_pub = self.create_publisher(Bool, "camera/enable", 10)
 
         # Subscribe to sensor readings for API
         self._latest_distance: float = 0.0
         self._distance_sub = self.create_subscription(
             Float32, "ultrasonic/distance", self._distance_callback, 10
-            Float32, "ultrasonic/distance", self._distance_callback, 10
         )
 
         self._latest_motor_status: dict = {}
         self._motor_sub = self.create_subscription(
-            String, "motor/status", self._motor_status_callback, 10
             String, "motor/status", self._motor_status_callback, 10
         )
 
@@ -431,6 +427,5 @@ def main(args=None):
         rclpy.try_shutdown()
 
 
-if __name__ == "__main__":
 if __name__ == "__main__":
     main()
