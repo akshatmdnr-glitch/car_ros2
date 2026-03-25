@@ -15,15 +15,13 @@ direct access to node internals (e.g., latest camera frame) while
 also publishing/subscribing to ROS 2 topics.
 """
 
-import argparse
 import asyncio
-import fcntl
-import json
-import os
-import socket
-import struct
 import threading
 import time
+import json
+import logging
+import socket
+import netifaces
 
 import rclpy
 from rclpy.node import Node
@@ -40,6 +38,44 @@ import uvicorn
 from car_slave.nodes.camera_node import CameraNode
 from car_slave.nodes.uv_sensor_node import UltrasonicSensorNode
 from car_slave.nodes.motor_controller_node import MotorControllerNode
+from starlette.requests import Request
+
+
+# ── Logging setup ────────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("network")
+
+
+def _get_interface_subnet(iface: str) -> str | None:
+    """Get the subnet prefix for a network interface (e.g., '192.168.1')."""
+    try:
+        addrs = netifaces.ifaddresses(iface)
+        if netifaces.AF_INET in addrs:
+            ip = addrs[netifaces.AF_INET][0].get("addr", "")
+            parts = ip.split(".")
+            if len(parts) == 4:
+                return ".".join(parts[:3])
+    except Exception:
+        pass
+    return None
+
+
+def _detect_network_source(client_ip: str) -> str:
+    """Detect if client IP is on Ethernet or WiFi subnet."""
+    for iface in ["eth0", "enp0s3", "enp2s0"]:
+        subnet = _get_interface_subnet(iface)
+        if subnet and client_ip.startswith(subnet + "."):
+            return f"ethernet ({iface})"
+    for iface in ["wlan0", "wlp3s0"]:
+        subnet = _get_interface_subnet(iface)
+        if subnet and client_ip.startswith(subnet + "."):
+            return f"wifi ({iface})"
+    return "unknown"
 
 
 # ── Pydantic models for request validation ──────────────────────────
@@ -106,94 +142,6 @@ camera_node: CameraNode | None = None
 ultrasonic_node: UltrasonicSensorNode | None = None
 motor_node: MotorControllerNode | None = None
 bridge_node: BridgeNode | None = None
-network_mode: str = "any"
-server_host: str = "0.0.0.0"
-server_port: int = 8000
-
-
-def _get_interface_ipv4(interface_name: str) -> str | None:
-    """Return the IPv4 address for a network interface on Linux."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        request = struct.pack("256s", interface_name[:15].encode("utf-8"))
-        response = fcntl.ioctl(sock.fileno(), 0x8915, request)
-        return socket.inet_ntoa(response[20:24])
-    except OSError:
-        return None
-    finally:
-        sock.close()
-
-
-def _detect_interface(preferred_name: str, prefixes: tuple[str, ...]) -> str | None:
-    """Return a usable interface name, preferring an explicit name."""
-    candidates = []
-    if preferred_name:
-        candidates.append(preferred_name)
-
-    try:
-        for interface_name in os.listdir("/sys/class/net"):
-            if interface_name == preferred_name:
-                continue
-            if interface_name.startswith(prefixes):
-                candidates.append(interface_name)
-    except OSError:
-        pass
-
-    for interface_name in candidates:
-        if _get_interface_ipv4(interface_name) is not None:
-            return interface_name
-    return None
-
-
-def _resolve_server_binding(
-    mode: str, ethernet_iface: str, wifi_iface: str
-) -> tuple[str, str | None]:
-    """Resolve which host/IP FastAPI should bind to."""
-    if mode == "any":
-        return "0.0.0.0", None
-
-    if mode == "ethernet":
-        interface_name = _detect_interface(ethernet_iface, ("eth", "en"))
-    else:
-        interface_name = _detect_interface(wifi_iface, ("wlan", "wl"))
-
-    if interface_name is None:
-        raise RuntimeError(f"No active {mode} interface with an IPv4 address was found")
-
-    interface_ip = _get_interface_ipv4(interface_name)
-    if interface_ip is None:
-        raise RuntimeError(
-            f"Could not resolve IPv4 address for interface '{interface_name}'"
-        )
-
-    return interface_ip, interface_name
-
-
-def _parse_args(args=None):
-    parser = argparse.ArgumentParser(description="Car Slave ROS 2 FastAPI bridge")
-    parser.add_argument(
-        "--network-mode",
-        choices=("any", "ethernet", "wifi"),
-        default="any",
-        help="Accept requests on all interfaces, Ethernet only, or Wi-Fi only",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="HTTP port for the FastAPI bridge",
-    )
-    parser.add_argument(
-        "--ethernet-iface",
-        default="eth0",
-        help="Preferred Ethernet interface name when --network-mode=ethernet",
-    )
-    parser.add_argument(
-        "--wifi-iface",
-        default="wlan0",
-        help="Preferred Wi-Fi interface name when --network-mode=wifi",
-    )
-    return parser.parse_known_args(args=args)
 
 
 # ── FastAPI app ──────────────────────────────────────────────────────
@@ -213,6 +161,17 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_network_source(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    network_source = _detect_network_source(client_ip)
+    logger.info(
+        f"Request {request.method} {request.url.path} from {client_ip} via {network_source}"
+    )
+    response = await call_next(request)
+    return response
+
+
 @app.get("/", summary="Health check")
 async def root():
     return {"status": "ok", "node": "car_slave", "timestamp": time.time()}
@@ -221,11 +180,6 @@ async def root():
 @app.get("/status", summary="Get full system status")
 async def get_status():
     return {
-        "network": {
-            "mode": network_mode,
-            "bind_host": server_host,
-            "port": server_port,
-        },
         "camera": {
             "active": camera_node is not None and camera_node._enabled,
             "has_hardware": camera_node is not None and camera_node._camera is not None,
@@ -327,25 +281,9 @@ def _ros_spin(executor: MultiThreadedExecutor):
 
 
 def main(args=None):
-    global \
-        camera_node, \
-        ultrasonic_node, \
-        motor_node, \
-        bridge_node, \
-        network_mode, \
-        server_host, \
-        server_port
+    global camera_node, ultrasonic_node, motor_node, bridge_node
 
-    parsed_args, ros_args = _parse_args(args)
-    network_mode = parsed_args.network_mode
-    server_port = parsed_args.port
-    server_host, bound_interface = _resolve_server_binding(
-        parsed_args.network_mode,
-        parsed_args.ethernet_iface,
-        parsed_args.wifi_iface,
-    )
-
-    rclpy.init(args=ros_args)
+    rclpy.init(args=args)
 
     # Create all nodes
     camera_node = CameraNode()
@@ -365,12 +303,9 @@ def main(args=None):
     ros_thread.start()
 
     # Start FastAPI server (blocking)
-    bridge_node.get_logger().info(
-        f"Starting FastAPI server on {server_host}:{server_port} (mode={network_mode}"
-        f"{', interface=' + bound_interface if bound_interface else ''})"
-    )
+    bridge_node.get_logger().info("Starting FastAPI server on 0.0.0.0:8000")
     try:
-        uvicorn.run(app, host=server_host, port=server_port, log_level="info")
+        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
     except KeyboardInterrupt:
         pass
     finally:

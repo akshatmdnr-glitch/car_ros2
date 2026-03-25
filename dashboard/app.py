@@ -35,15 +35,13 @@ def app_log(level: str, msg: str):
     getattr(log, level.lower(), log.info)(msg)
 
 
-app_log("INFO", f"Dashboard started, target: {BASE_URL}")
-
-
 # -- Sidebar: Connection --------------------------------------------------
 
 st.sidebar.title("Connection")
 pi_host = st.sidebar.text_input("Raspberry Pi IP", value="localhost")
 pi_port = st.sidebar.number_input("Port", value=8000, min_value=1, max_value=65535)
 BASE_URL = f"http://{pi_host}:{pi_port}"
+app_log("INFO", f"Dashboard started, target: {BASE_URL}")
 
 if st.sidebar.button("Test Connection"):
     app_log("INFO", f"Testing connection to {BASE_URL}")
