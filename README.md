@@ -91,6 +91,26 @@ python3 main.py
 
 The HTTP API will be available at `http://<pi-ip>:8000`.
 
+To restrict the bridge to a specific network path, start it with one of these flags:
+
+```bash
+# Accept requests on any interface (default)
+ros2 run car_slave bridge --network-mode any
+
+# Ethernet only
+ros2 run car_slave bridge --network-mode ethernet
+
+# Wi-Fi only
+ros2 run car_slave bridge --network-mode wifi
+```
+
+You can also override the preferred interface names when needed:
+
+```bash
+ros2 run car_slave bridge --network-mode ethernet --ethernet-iface enp1s0
+ros2 run car_slave bridge --network-mode wifi --wifi-iface wlp2s0
+```
+
 ### Individual Nodes (for testing)
 
 ```bash

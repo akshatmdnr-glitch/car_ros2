@@ -1,3 +1,4 @@
+
 """
 Car Slave — Master Dashboard
 
@@ -14,12 +15,43 @@ import time
 
 st.set_page_config(page_title="Car Slave Dashboard", layout="wide")
 
+if "network_target" not in st.session_state:
+    st.session_state.network_target = "Ethernet"
+if "ethernet_host" not in st.session_state:
+    st.session_state.ethernet_host = "localhost"
+if "wifi_host" not in st.session_state:
+    st.session_state.wifi_host = "localhost"
+
 # -- Sidebar: Connection --------------------------------------------------
 
 st.sidebar.title("Connection")
-pi_host = st.sidebar.text_input("Raspberry Pi IP", value="localhost")
+network_target = st.sidebar.toggle(
+    "Use Wi-Fi connection",
+    value=st.session_state.network_target == "Wi-Fi",
+)
+st.session_state.network_target = "Wi-Fi" if network_target else "Ethernet"
+
+ethernet_host = st.sidebar.text_input(
+    "Ethernet IP",
+    key="ethernet_host",
+    disabled=st.session_state.network_target != "Ethernet",
+)
+wifi_host = st.sidebar.text_input(
+    "Wi-Fi IP",
+    key="wifi_host",
+    disabled=st.session_state.network_target != "Wi-Fi",
+)
+
+pi_host = (
+    st.session_state.wifi_host
+    if st.session_state.network_target == "Wi-Fi"
+    else st.session_state.ethernet_host
+)
 pi_port = st.sidebar.number_input("Port", value=8000, min_value=1, max_value=65535)
 BASE_URL = f"http://{pi_host}:{pi_port}"
+st.sidebar.caption(
+    f"Active target: {st.session_state.network_target} ({pi_host}:{pi_port})"
+)
 
 if st.sidebar.button("Test Connection"):
     try:
@@ -35,7 +67,9 @@ if st.sidebar.button("Test Connection"):
 
 st.sidebar.divider()
 auto_refresh = st.sidebar.checkbox("Auto-refresh data", value=False)
-refresh_rate = st.sidebar.slider("Refresh interval (s)", 1, 10, 2, disabled=not auto_refresh)
+refresh_rate = st.sidebar.slider(
+    "Refresh interval (s)", 1, 10, 2, disabled=not auto_refresh
+)
 
 # -- Title -----------------------------------------------------------------
 
@@ -75,14 +109,18 @@ with col_camera:
     with cam_col_a:
         if st.button("Enable Camera"):
             try:
-                requests.post(f"{BASE_URL}/camera/enable", json={"enabled": True}, timeout=3)
+                requests.post(
+                    f"{BASE_URL}/camera/enable", json={"enabled": True}, timeout=3
+                )
                 st.success("Camera enabled")
             except requests.RequestException as e:
                 st.error(str(e))
     with cam_col_b:
         if st.button("Disable Camera"):
             try:
-                requests.post(f"{BASE_URL}/camera/enable", json={"enabled": False}, timeout=3)
+                requests.post(
+                    f"{BASE_URL}/camera/enable", json={"enabled": False}, timeout=3
+                )
                 st.warning("Camera disabled")
             except requests.RequestException as e:
                 st.error(str(e))
@@ -230,8 +268,13 @@ with col_controls:
                 status = r.json()
                 with status_placeholder.container():
                     s1, s2, s3 = st.columns(3)
-                    s1.metric("Camera", "Active" if status["camera"]["active"] else "Inactive")
-                    s2.metric("Distance", f"{status['ultrasonic']['latest_distance_cm']:.1f} cm")
+                    s1.metric(
+                        "Camera", "Active" if status["camera"]["active"] else "Inactive"
+                    )
+                    s2.metric(
+                        "Distance",
+                        f"{status['ultrasonic']['latest_distance_cm']:.1f} cm",
+                    )
                     motor = status.get("motor", {})
                     s3.metric("GPIO", "Yes" if motor.get("gpio_available") else "No")
             else:

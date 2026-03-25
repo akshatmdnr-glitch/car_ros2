@@ -15,10 +15,15 @@ direct access to node internals (e.g., latest camera frame) while
 also publishing/subscribing to ROS 2 topics.
 """
 
+import argparse
 import asyncio
+import fcntl
+import json
+import os
+import socket
+import struct
 import threading
 import time
-import json
 
 import rclpy
 from rclpy.node import Node
@@ -39,6 +44,7 @@ from car_slave.nodes.motor_controller_node import MotorControllerNode
 
 # ── Pydantic models for request validation ──────────────────────────
 
+
 class CmdVelRequest(BaseModel):
     linear_x: float = Field(0.0, ge=-1.0, le=1.0, description="Forward/backward speed")
     angular_z: float = Field(0.0, ge=-1.0, le=1.0, description="Rotation speed")
@@ -50,27 +56,28 @@ class CameraEnableRequest(BaseModel):
 
 # ── Bridge Node (subscribes to topics for API readback) ─────────────
 
+
 class BridgeNode(Node):
     """Lightweight node that subscribes to topics for HTTP API readback."""
 
     def __init__(self):
-        super().__init__('fastapi_bridge')
+        super().__init__("fastapi_bridge")
 
-        self._cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self._camera_enable_pub = self.create_publisher(Bool, 'camera/enable', 10)
+        self._cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self._camera_enable_pub = self.create_publisher(Bool, "camera/enable", 10)
 
         # Subscribe to sensor readings for API
         self._latest_distance: float = 0.0
         self._distance_sub = self.create_subscription(
-            Float32, 'ultrasonic/distance', self._distance_callback, 10
+            Float32, "ultrasonic/distance", self._distance_callback, 10
         )
 
         self._latest_motor_status: dict = {}
         self._motor_sub = self.create_subscription(
-            String, 'motor/status', self._motor_status_callback, 10
+            String, "motor/status", self._motor_status_callback, 10
         )
 
-        self.get_logger().info('FastAPI bridge node started')
+        self.get_logger().info("FastAPI bridge node started")
 
     def _distance_callback(self, msg: Float32):
         self._latest_distance = msg.data
@@ -99,6 +106,94 @@ camera_node: CameraNode | None = None
 ultrasonic_node: UltrasonicSensorNode | None = None
 motor_node: MotorControllerNode | None = None
 bridge_node: BridgeNode | None = None
+network_mode: str = "any"
+server_host: str = "0.0.0.0"
+server_port: int = 8000
+
+
+def _get_interface_ipv4(interface_name: str) -> str | None:
+    """Return the IPv4 address for a network interface on Linux."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        request = struct.pack("256s", interface_name[:15].encode("utf-8"))
+        response = fcntl.ioctl(sock.fileno(), 0x8915, request)
+        return socket.inet_ntoa(response[20:24])
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+def _detect_interface(preferred_name: str, prefixes: tuple[str, ...]) -> str | None:
+    """Return a usable interface name, preferring an explicit name."""
+    candidates = []
+    if preferred_name:
+        candidates.append(preferred_name)
+
+    try:
+        for interface_name in os.listdir("/sys/class/net"):
+            if interface_name == preferred_name:
+                continue
+            if interface_name.startswith(prefixes):
+                candidates.append(interface_name)
+    except OSError:
+        pass
+
+    for interface_name in candidates:
+        if _get_interface_ipv4(interface_name) is not None:
+            return interface_name
+    return None
+
+
+def _resolve_server_binding(
+    mode: str, ethernet_iface: str, wifi_iface: str
+) -> tuple[str, str | None]:
+    """Resolve which host/IP FastAPI should bind to."""
+    if mode == "any":
+        return "0.0.0.0", None
+
+    if mode == "ethernet":
+        interface_name = _detect_interface(ethernet_iface, ("eth", "en"))
+    else:
+        interface_name = _detect_interface(wifi_iface, ("wlan", "wl"))
+
+    if interface_name is None:
+        raise RuntimeError(f"No active {mode} interface with an IPv4 address was found")
+
+    interface_ip = _get_interface_ipv4(interface_name)
+    if interface_ip is None:
+        raise RuntimeError(
+            f"Could not resolve IPv4 address for interface '{interface_name}'"
+        )
+
+    return interface_ip, interface_name
+
+
+def _parse_args(args=None):
+    parser = argparse.ArgumentParser(description="Car Slave ROS 2 FastAPI bridge")
+    parser.add_argument(
+        "--network-mode",
+        choices=("any", "ethernet", "wifi"),
+        default="any",
+        help="Accept requests on all interfaces, Ethernet only, or Wi-Fi only",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="HTTP port for the FastAPI bridge",
+    )
+    parser.add_argument(
+        "--ethernet-iface",
+        default="eth0",
+        help="Preferred Ethernet interface name when --network-mode=ethernet",
+    )
+    parser.add_argument(
+        "--wifi-iface",
+        default="wlan0",
+        help="Preferred Wi-Fi interface name when --network-mode=wifi",
+    )
+    return parser.parse_known_args(args=args)
 
 
 # ── FastAPI app ──────────────────────────────────────────────────────
@@ -126,12 +221,19 @@ async def root():
 @app.get("/status", summary="Get full system status")
 async def get_status():
     return {
+        "network": {
+            "mode": network_mode,
+            "bind_host": server_host,
+            "port": server_port,
+        },
         "camera": {
             "active": camera_node is not None and camera_node._enabled,
             "has_hardware": camera_node is not None and camera_node._camera is not None,
         },
         "ultrasonic": {
-            "type": ultrasonic_node.active_sensor_type if ultrasonic_node else "unavailable",
+            "type": ultrasonic_node.active_sensor_type
+            if ultrasonic_node
+            else "unavailable",
             "latest_distance_cm": bridge_node._latest_distance if bridge_node else None,
         },
         "motor": bridge_node._latest_motor_status if bridge_node else {},
@@ -140,6 +242,7 @@ async def get_status():
 
 
 # ── Motor control ───────────────────────────────────────────────────
+
 
 @app.post("/cmd_vel", summary="Send velocity command to motors")
 async def cmd_vel(req: CmdVelRequest):
@@ -159,18 +262,22 @@ async def stop():
 
 # ── Ultrasonic Sensor ────────────────────────────────────────────────
 
+
 @app.get("/distance", summary="Get latest ultrasonic distance reading (cm)")
 async def get_distance():
     if bridge_node is None:
         return JSONResponse(status_code=503, content={"error": "Bridge not ready"})
     return {
         "distance_cm": bridge_node._latest_distance,
-        "sensor_type": ultrasonic_node.active_sensor_type if ultrasonic_node else "unavailable",
+        "sensor_type": ultrasonic_node.active_sensor_type
+        if ultrasonic_node
+        else "unavailable",
         "timestamp": time.time(),
     }
 
 
 # ── Camera ───────────────────────────────────────────────────────────
+
 
 @app.get("/camera/snapshot", summary="Get a single JPEG frame")
 async def camera_snapshot():
@@ -188,10 +295,7 @@ async def _mjpeg_generator():
         if camera_node is not None:
             frame = camera_node.get_latest_frame()
             if frame is not None:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
         await asyncio.sleep(1.0 / 30)  # ~30 fps
 
 
@@ -213,6 +317,7 @@ async def camera_enable(req: CameraEnableRequest):
 
 # ── ROS 2 spin in background thread ─────────────────────────────────
 
+
 def _ros_spin(executor: MultiThreadedExecutor):
     """Spin all ROS 2 nodes in a background thread."""
     try:
@@ -222,9 +327,25 @@ def _ros_spin(executor: MultiThreadedExecutor):
 
 
 def main(args=None):
-    global camera_node, ultrasonic_node, motor_node, bridge_node
+    global \
+        camera_node, \
+        ultrasonic_node, \
+        motor_node, \
+        bridge_node, \
+        network_mode, \
+        server_host, \
+        server_port
 
-    rclpy.init(args=args)
+    parsed_args, ros_args = _parse_args(args)
+    network_mode = parsed_args.network_mode
+    server_port = parsed_args.port
+    server_host, bound_interface = _resolve_server_binding(
+        parsed_args.network_mode,
+        parsed_args.ethernet_iface,
+        parsed_args.wifi_iface,
+    )
+
+    rclpy.init(args=ros_args)
 
     # Create all nodes
     camera_node = CameraNode()
@@ -244,9 +365,12 @@ def main(args=None):
     ros_thread.start()
 
     # Start FastAPI server (blocking)
-    bridge_node.get_logger().info('Starting FastAPI server on 0.0.0.0:8000')
+    bridge_node.get_logger().info(
+        f"Starting FastAPI server on {server_host}:{server_port} (mode={network_mode}"
+        f"{', interface=' + bound_interface if bound_interface else ''})"
+    )
     try:
-        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+        uvicorn.run(app, host=server_host, port=server_port, log_level="info")
     except KeyboardInterrupt:
         pass
     finally:
@@ -258,5 +382,5 @@ def main(args=None):
         rclpy.try_shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
