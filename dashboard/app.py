@@ -94,9 +94,7 @@ with col_controls:
 
     speed = st.slider("Speed", 0.1, 1.0, 0.5, 0.1)
 
-    # JavaScript-based hold-to-drive controls.
-    # On mousedown/touchstart: sends /cmd_vel every 100ms.
-    # On mouseup/touchend/mouseleave: sends /stop.
+    # Hold-to-drive: sends ONE /cmd_vel on press, ONE /stop on release.
     motor_html = f"""
     <style>
       .dpad {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; max-width: 280px; margin: 0 auto; }}
@@ -128,7 +126,7 @@ with col_controls:
     <script>
       (function() {{
         const BASE = "{BASE_URL}";
-        let interval = null;
+        let active = null;
 
         function sendCmd(lx, az) {{
           fetch(BASE + "/cmd_vel", {{
@@ -142,28 +140,28 @@ with col_controls:
           fetch(BASE + "/stop", {{method: "POST"}}).catch(() => {{}});
         }}
 
-        function startHold(btn) {{
-          const lx = btn.dataset.lx;
-          const az = btn.dataset.az;
+        function startDrive(btn) {{
+          if (active) return;
+          active = btn;
           btn.classList.add("held");
-          sendCmd(lx, az);
-          interval = setInterval(() => sendCmd(lx, az), 100);
+          sendCmd(btn.dataset.lx, btn.dataset.az);
         }}
 
-        function stopHold(btn) {{
-          btn.classList.remove("held");
-          if (interval) {{ clearInterval(interval); interval = null; }}
+        function stopDrive() {{
+          if (!active) return;
+          active.classList.remove("held");
+          active = null;
           sendStop();
         }}
 
         document.querySelectorAll(".dpad button[data-lx]").forEach(btn => {{
-          btn.addEventListener("mousedown", (e) => {{ e.preventDefault(); startHold(btn); }});
-          btn.addEventListener("mouseup", () => stopHold(btn));
-          btn.addEventListener("mouseleave", () => {{ if (interval) stopHold(btn); }});
-          btn.addEventListener("touchstart", (e) => {{ e.preventDefault(); startHold(btn); }});
-          btn.addEventListener("touchend", () => stopHold(btn));
-          btn.addEventListener("touchcancel", () => stopHold(btn));
+          btn.addEventListener("mousedown", (e) => {{ e.preventDefault(); startDrive(btn); }});
+          btn.addEventListener("touchstart", (e) => {{ e.preventDefault(); startDrive(btn); }});
         }});
+
+        document.addEventListener("mouseup", stopDrive);
+        document.addEventListener("touchend", stopDrive);
+        document.addEventListener("touchcancel", stopDrive);
 
         document.getElementById("stopBtn").addEventListener("click", sendStop);
         document.getElementById("stopBtn").addEventListener("touchstart", (e) => {{ e.preventDefault(); sendStop(); }});

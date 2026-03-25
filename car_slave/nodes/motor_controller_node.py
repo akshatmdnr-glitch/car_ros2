@@ -133,8 +133,8 @@ class MotorControllerNode(Node):
             self.get_logger().error(f'Motor {side} error: {e}')
 
     def _status_callback(self):
-        # Safety: stop motors if no command received for 500ms
-        if time.time() - self._last_cmd_time > 0.5:
+        # Safety: stop motors if no command received for 5s
+        if time.time() - self._last_cmd_time > 5.0:
             if self._linear != 0.0 or self._angular != 0.0:
                 self._linear = 0.0
                 self._angular = 0.0

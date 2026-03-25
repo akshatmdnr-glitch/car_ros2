@@ -72,15 +72,18 @@ class CameraNode(Node):
         )
         self._camera.configure(config)
 
-        # Set autofocus mode
-        from libcamera import controls
-        af_modes = {
-            'continuous': controls.AfModeEnum.Continuous,
-            'manual': controls.AfModeEnum.Manual,
-            'auto': controls.AfModeEnum.Auto,
-        }
-        af_mode = af_modes.get(self._autofocus_mode, controls.AfModeEnum.Continuous)
-        self._camera.set_controls({'AfMode': af_mode})
+        # Set autofocus mode (may not be supported on all camera modules)
+        try:
+            from libcamera import controls
+            af_modes = {
+                'continuous': controls.AfModeEnum.Continuous,
+                'manual': controls.AfModeEnum.Manual,
+                'auto': controls.AfModeEnum.Auto,
+            }
+            af_mode = af_modes.get(self._autofocus_mode, controls.AfModeEnum.Continuous)
+            self._camera.set_controls({'AfMode': af_mode})
+        except Exception as e:
+            self.get_logger().warn(f'Autofocus setup skipped: {e}')
 
         self._camera.start()
 
@@ -109,7 +112,7 @@ class CameraNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'camera'
         msg.format = 'jpeg'
-        msg.data = list(jpeg_bytes)
+        msg.data = jpeg_bytes
         self._pub.publish(msg)
 
     def _capture_frame(self) -> np.ndarray | None:
