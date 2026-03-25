@@ -1,0 +1,30 @@
+# Car Slave default parameters
+# Override these via launch arguments or ROS 2 parameter files
+
+camera_node:
+  ros__parameters:
+    width: 640
+    height: 480
+    fps: 30
+    jpeg_quality: 80
+    autofocus_mode: "continuous"
+
+ultrasonic_sensor_node:
+  ros__parameters:
+    publish_rate: 10.0
+    trig_pin: 23
+    echo_pin: 24
+    max_distance: 400.0
+    timeout_us: 30000
+
+motor_controller_node:
+  ros__parameters:
+    left_forward_pin: 17    # IN1
+    left_backward_pin: 27   # IN2
+    left_pwm_pin: 18        # ENA
+    right_forward_pin: 22   # IN3
+    right_backward_pin: 5   # IN4
+    right_pwm_pin: 19       # ENB
+    max_speed: 1.0
+    wheel_base: 0.2
+    status_rate: 5.0
