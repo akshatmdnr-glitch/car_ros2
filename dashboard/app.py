@@ -256,7 +256,8 @@ with col_controls:
         const BASE = "{BASE_URL}";
         const statusEl = document.getElementById("motor-status");
         let active = null;
-        let cmdCount = 0;
+        let driveInterval = null;
+        const REPEAT_MS = 200; // resend cmd_vel every 200ms while held
 
         function setStatus(msg, cls) {{
           statusEl.textContent = msg;
@@ -265,9 +266,7 @@ with col_controls:
         }}
 
         function sendCmd(lx, az) {{
-          cmdCount++;
-          const n = cmdCount;
-          setStatus("Sending cmd_vel lx=" + lx + " az=" + az + " ...", "status-send");
+          setStatus("Driving lx=" + lx + " az=" + az, "status-send");
           fetch(BASE + "/cmd_vel", {{
             method: "POST",
             headers: {{"Content-Type": "application/json"}},
@@ -278,7 +277,7 @@ with col_controls:
             return r.json();
           }})
           .then(data => {{
-            if (n === cmdCount) setStatus("cmd_vel OK: lx=" + data.linear_x + " az=" + data.angular_z, "status-ok");
+            if (active) setStatus("Driving lx=" + data.linear_x + " az=" + data.angular_z, "status-ok");
           }})
           .catch(err => {{
             setStatus("cmd_vel FAILED: " + err.message, "status-err");
@@ -287,8 +286,6 @@ with col_controls:
         }}
 
         function sendStop() {{
-          cmdCount++;
-          const n = cmdCount;
           setStatus("Sending stop...", "status-send");
           fetch(BASE + "/stop", {{method: "POST"}})
           .then(r => {{
@@ -296,7 +293,7 @@ with col_controls:
             return r.json();
           }})
           .then(() => {{
-            if (n === cmdCount) setStatus("Stopped", "status-ok");
+            setStatus("Stopped", "status-ok");
           }})
           .catch(err => {{
             setStatus("STOP FAILED: " + err.message, "status-err");
@@ -305,14 +302,27 @@ with col_controls:
         }}
 
         function startDrive(btn) {{
-          if (active) return;
+          if (active === btn) return;
+          // If switching direction, clear previous interval
+          if (driveInterval) clearInterval(driveInterval);
+
           active = btn;
+          document.querySelectorAll(".dpad button[data-lx]").forEach(b => b.classList.remove("held"));
           btn.classList.add("held");
-          sendCmd(btn.dataset.lx, btn.dataset.az);
+
+          // Send immediately, then repeat while held
+          const lx = btn.dataset.lx;
+          const az = btn.dataset.az;
+          sendCmd(lx, az);
+          driveInterval = setInterval(() => sendCmd(lx, az), REPEAT_MS);
         }}
 
         function stopDrive() {{
           if (!active) return;
+          if (driveInterval) {{
+            clearInterval(driveInterval);
+            driveInterval = null;
+          }}
           active.classList.remove("held");
           active = null;
           sendStop();
@@ -326,6 +336,7 @@ with col_controls:
         document.addEventListener("mouseup", stopDrive);
         document.addEventListener("touchend", stopDrive);
         document.addEventListener("touchcancel", stopDrive);
+        window.addEventListener("blur", stopDrive);
 
         document.getElementById("stopBtn").addEventListener("click", sendStop);
         document.getElementById("stopBtn").addEventListener("touchstart", (e) => {{ e.preventDefault(); sendStop(); }});
